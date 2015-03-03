@@ -38,12 +38,12 @@ type MindControl struct {
 	quitSave         chan bool
 	shutdown         chan bool
 	SerialDevice     *OpenBCI
-	broadcast        chan *PacketBatcher
+	broadcast        chan *Message
 	gain             [8]float64
 	saving           bool
 }
 
-func NewMindControl(broadcast chan *PacketBatcher, shutdown chan bool) *MindControl {
+func NewMindControl(broadcast chan *Message, shutdown chan bool) *MindControl {
 	//Set up the serial device
 	serialDevice := NewOpenBCI()
 	return &MindControl{
@@ -56,32 +56,12 @@ func NewMindControl(broadcast chan *PacketBatcher, shutdown chan bool) *MindCont
 		quitSendPackets:  make(chan bool),
 		quitSave:         make(chan bool),
 		genToggleChan:    make(chan bool),
+		shutdown:         shutdown,
 		SerialDevice:     serialDevice,
 		gain:             [8]float64{24.0, 24.0, 24.0, 24.0, 24.0, 24.0, 24.0, 24.0},
 		broadcast:        broadcast,
-		shutdown:         shutdown,
 		saving:           false,
 	}
-}
-
-func (mc *MindControl) Open() {
-	mc.SerialDevice.open()
-	mc.ResetChan <- true
-	go mc.SerialDevice.read()
-}
-
-func (mc *MindControl) Close() {
-	if mc.saving == true {
-		mc.quitSave <- true
-	}
-	mc.SerialDevice.Close()
-	mc.quitDecodeStream <- true
-	mc.quitSendPackets <- true
-	mc.quitGenTest <- true
-	close(mc.PacketChan)
-	close(mc.ResetChan)
-	close(mc.genToggleChan)
-	mc.shutdown <- true
 }
 
 func (mc *MindControl) Start() {
@@ -89,6 +69,28 @@ func (mc *MindControl) Start() {
 	go mc.DecodeStream()
 	go mc.SerialDevice.command()
 	go mc.GenTestPackets()
+	mc.genToggleChan <- false
+}
+
+func (mc *MindControl) Open() {
+	mc.SerialDevice.open()
+	buf := make([]byte, readBufferSize)
+	go mc.SerialDevice.read(buf)
+	mc.ResetChan <- true
+}
+
+func (mc *MindControl) Close() {
+	if mc.saving {
+		mc.quitSave <- true
+	}
+	mc.SerialDevice.Close()
+	mc.quitDecodeStream <- true
+	mc.quitSendPackets <- true
+	close(mc.quitGenTest)
+	close(mc.PacketChan)
+	close(mc.ResetChan)
+	close(mc.genToggleChan)
+	mc.shutdown <- true
 }
 
 func openFile() (*os.File, error) {
@@ -242,6 +244,7 @@ func (mc *MindControl) DecodeStream() {
 
 func (mc *MindControl) GenTestPackets() {
 	var gain float64 = 24
+	var on bool
 	sign := func() int32 {
 		if rand.Int31() > (1 << 30) {
 			return -1
@@ -253,53 +256,75 @@ func (mc *MindControl) GenTestPackets() {
 		select {
 		case <-mc.quitGenTest:
 			return
-		case <-mc.genToggleChan:
-			for {
-				select {
-				case <-mc.quitGenTest:
-					return
-				case <-mc.genToggleChan:
-					<-mc.genToggleChan
-				default:
-					packet := NewPacket()
-					packet.Chan1 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
-					packet.Chan2 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
-					packet.Chan3 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
-					packet.Chan4 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
-					packet.Chan5 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
-					packet.Chan6 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
-					packet.Chan7 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
-					packet.Chan8 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
-					mc.PacketChan <- packet
-					time.Sleep(4 * time.Millisecond)
-				}
+		case on = <-mc.genToggleChan:
+			on = <-mc.genToggleChan
+		default:
+			if on {
+				packet := NewPacket()
+				packet.Chan1 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
+				packet.Chan2 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
+				packet.Chan3 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
+				packet.Chan4 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
+				packet.Chan5 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
+				packet.Chan6 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
+				packet.Chan7 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
+				packet.Chan8 = scaleToVolts(rand.Int31n(1<<23)*sign(), gain)
+				mc.PacketChan <- packet
+				time.Sleep(4 * time.Millisecond)
 			}
 		}
 	}
 }
 
+type Message struct {
+	Name    string
+	Payload map[string][]float64
+}
+
+func NewMessage(name string, payload map[string][]float64) *Message {
+	return &Message{
+		Name:    name,
+		Payload: payload,
+	}
+
+}
+
 func (mc *MindControl) sendPackets() {
+	var m *Message
 	last_second := time.Now().UnixNano()
 	second := time.Now().UnixNano()
 	var i int
 
-	pb := NewPacketBatcher()
+	pbFFT := NewPacketBatcher(FFTSize)
+	pbRaw := NewPacketBatcher(RawMsgSize)
 
 	for {
 		select {
 		case <-mc.quitSendPackets:
 			return
 		case p := <-mc.PacketChan:
+
 			i++
+
 			if mc.saving == true {
 				mc.savePacketChan <- p
 			}
-			pb.packets[i%packetBatchSize] = p
 
-			if i%packetBatchSize == 0 {
-				pb.batch()
-				mc.broadcast <- pb
-				pb = NewPacketBatcher()
+			pbFFT.packets[i%FFTSize] = p
+			pbRaw.packets[i%RawMsgSize] = p
+
+			if i%RawMsgSize == 0 {
+				pbRaw.batch()
+				m = NewMessage("raw", pbRaw.Chans)
+				mc.broadcast <- m
+				pbRaw = NewPacketBatcher(RawMsgSize)
+			}
+			if i%FFTSize == 0 {
+				pbFFT.batch()
+				pbFFT.setFFT()
+				m = NewMessage("fft", pbFFT.FFTs)
+				mc.broadcast <- m
+				pbFFT = NewPacketBatcher(FFTSize)
 			}
 			if i%250 == 0 {
 				second = time.Now().UnixNano()

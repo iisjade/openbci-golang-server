@@ -1,9 +1,31 @@
 <!DOCTYPE html>
 <html>
   <head>
+		<style>
+
+			.axis text {
+				font: 10px sans-serif;
+			}
+
+			.axis path,
+			.axis line {
+				fill: none;
+				stroke: #000;
+				shape-rendering: crispEdges;
+			}
+
+			.line {
+				fill: none;
+				stroke: steelblue;
+				stroke-width: 1.5px;
+			}
+
+		</style>
+    
     <link rel="stylesheet" href="../bootstrap/css/bootstrap.css">
     <link rel="stylesheet" href="/static/main.css">
-    <script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.9.1/jquery.min.js"></script>
+		<script src="http://d3js.org/d3.v3.min.js" charset="utf-8"></script>
+		<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
     <script type="text/javascript">
       if (window["WebSocket"]) {
         conn = new WebSocket("ws://{{$}}/ws");
@@ -11,10 +33,16 @@
           console.log("closing");
         }
         conn.onmessage = function(evt) {
-          data = JSON.parse(evt.data);
-          console.log("received data:", data);
-          var newDatum = data.FFTs.FFTChan1.slice(0, 125);
-          bciVis.updateData(newDatum);
+          rdata = JSON.parse(evt.data);
+					if (rdata == null) {
+						return
+					} else if (rdata.Name == "raw") {
+						for (i = 0; i < rdata.Payload.Chan1.length; i++) {
+							timeseries.updateRaw(rdata.Payload.Chan1[i]);
+						}
+					} else if (rdata.Name == "fft") {
+						bciVis.updateData(rdata.Payload.Chan1.slice(0, 125));
+					}
         }
         conn.onopen = function(evt) {
           console.log("opening");
@@ -27,6 +55,31 @@
         conn.close();
       });
     </script>
+		<script id="vertShader" type="x-shader/x-vertex">
+			uniform mat4 modelMat;
+			uniform mat4 viewMat;
+			uniform mat4 projMat;
+
+			attribute vec3 pos;
+
+			varying vec4 worldPos;
+			void main() {
+				worldPos = modelMat * vec4(pos, 1);
+				gl_Position = projMat * viewMat * worldPos;
+			}
+
+		</script>
+
+		<script id="fragShader" type="x-shader/x-fragment">
+
+			varying mediump vec4 worldPos;
+
+			void main() {
+				gl_FragColor = vec4(1.0 - worldPos.y, worldPos.y, 0.0, 1.0);
+				gl_FragColor.xy = normalize(gl_FragColor.xy);
+
+			}
+		</script>
   </head>
 
   <body>
@@ -53,8 +106,7 @@
         <div class="row">
           <div class="col-md-8">
             <div class="canvas">
-              <script src="/js/handler.js"></script>
-            
+
               <canvas id="canvas" width="750" height="500"></canvas>
               
               <script id="vertShader" type="x-shader/x-vertex">
@@ -83,8 +135,7 @@
                 }
               </script>
               
-              <script src="http://localhost:8888/js/webgl-debug.js"></script>
-              
+              <script src="/js/webgl-debug.js"></script>
               <script src="/js/gl-matrix-min.js"></script>
               <script src="/js/geometry.js"></script>
               <script src="/js/main.js"></script>
@@ -172,8 +223,7 @@
         <div class="row">
           <div class="col-md-4">
             <div class="thumbnail" id="chantoggle">
-              <input type="image" src="http://dailyheal.com/wp-content/uploads/Use-Meditation-To-Reboot-Your-Brain.jpg" alt="Channel 1" value="1" href="http://{{$}}/x/" active="true">Channel 1</input>
-            </div>
+              <svg class="timeseries2d" alt="Channel 1" value="1" href="http://{{$}}/x/" active="true"></svg>            </div>
             <div class="thumbnail" id="chantoggle">
               <input type="image" src="http://dailyheal.com/wp-content/uploads/Use-Meditation-To-Reboot-Your-Brain.jpg" alt="Channel 4" value="4" href="http://{{$}}/x/" active="true">Channel 4</input>
             </div>
@@ -206,7 +256,7 @@
         </div>
       </div>
     </div>
-    
+
     <div class="learn-more">
       <div class="container-fluid">
         <div class="row">
@@ -229,8 +279,11 @@
       </div>
     </div>
 
-    <script src="http://code.jquery.com/jquery-1.11.0.min.js"></script>
-    <script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
-    <script src="/js/app.js"></script>
+	<script src="/js/gl-matrix-min.js"></script>
+	<script src="/js/geometry.js"></script>
+	<script src="/js/main.js"></script>
+	<script src="/js/handler.js"></script>
+	<script src="/js/timeseries.js"></script>
+	<script src="/js/app.js"></script>
   </body>
 </html>

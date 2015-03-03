@@ -20,7 +20,6 @@ package main
 
 import (
 	"github.com/pkg/term"
-	"io"
 	"log"
 	"time"
 )
@@ -84,10 +83,23 @@ func (d *OpenBCI) command() {
 	}
 }
 
-func (d *OpenBCI) read() {
-  bufSize := 1
-	buf := make([]byte, bufSize)
-  readChan := make(chan byte)
+type readMsg struct {
+	n   int
+	err error
+}
+
+func newReadMsg(n int, err error) readMsg {
+	return readMsg{n: n,
+		err: err}
+}
+
+func (d *OpenBCI) read(buf []byte) {
+	out := make(chan readMsg)
+	timeout := make(chan bool, 64)
+	defer func() {
+		close(out)
+		close(timeout)
+	}()
 	for {
 		select {
 		case resumeReadChan := <-d.pauseReadChan:
@@ -95,28 +107,28 @@ func (d *OpenBCI) read() {
 		case <-d.quitRead:
 			return
 		default:
-      if d.conn != nil {
-        go func() { 
-            n, err := d.conn.Read(buf)
-            if err == io.EOF {
-              d.timeoutChan <- true
-            } else if err != nil {
-              log.Fatal("Error reading from serial device: [", err, "]")
-            }
-            for i := 0; i < n; i++ {
-              readChan <- buf[i]
-            }
-        }()
-      }
-      select {
-        case <-time.After(readTimeout):
-					log.Println("ReadTimeout")
-          d.timeoutChan <- true
-        case b := <-readChan:
-          d.readChan <- b
-      }
-    }
-  }
+			if d.conn != nil {
+				go func(timeout <-chan bool, out chan readMsg) {
+					select {
+					case <-timeout:
+					case out <- newReadMsg(d.conn.Read(buf)):
+					}
+				}(timeout, out)
+				select {
+				case <-time.After(readTimeout):
+					timeout <- true
+					d.timeoutChan <- true
+				case msg := <-out:
+					if msg.err != nil {
+						log.Println("Read error:", msg.err)
+					}
+					for i := 0; i < msg.n; i++ {
+						d.readChan <- buf[i]
+					}
+				}
+			}
+		}
+	}
 }
 
 func (d *OpenBCI) write(s string) {
@@ -131,9 +143,7 @@ func (d *OpenBCI) write(s string) {
 }
 
 func (d *OpenBCI) open() {
-	//config := &serial.Config{Name: location, Baud: baud, ReadTimeout: readTimeout}
-	//conn, err := serial.OpenPort(config)
-  conn, err := term.Open(location, term.Speed(baud))
+	conn, err := term.Open(location, term.Speed(baud), term.CBreakMode)
 	if err != nil {
 		log.Fatal("Error conneting to serial device at [", location, "]: [", err, "]")
 	}
@@ -153,12 +163,11 @@ func (d *OpenBCI) reset(resumeChan chan bool) {
 	d.conn.Flush()
 
 	d.writeChan <- "s"
-	time.Sleep(400 * time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 	resumeRead := make(chan bool)
 	defer close(resumeRead)
 	d.pauseReadChan <- resumeRead
 	d.writeChan <- "v"
-	time.Sleep(1000 * time.Millisecond)
 	resumeRead <- true
 
 	init_array = [3]byte{'\x24', '\x24', '\x24'}
