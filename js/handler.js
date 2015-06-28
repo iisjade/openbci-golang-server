@@ -6,13 +6,23 @@ jQuery(document).ready(function() {
 								});
 	});
 
-	jQuery("#chantoggle :input").click(function() {
-		var postURL = $(this).attr('href') + 
-									$(this).attr('value') + '/' + 
+	jQuery(".thumbnail").click(function() {
+		$(this).toggleClass('faded');
+
+		if ($(this).hasClass('faded')) {
+			$(this).attr('active', false);
+		} else {
+			$(this).attr('active', true);
+		};
+
+		var button = $(this).find(":input")
+
+		var postURL = $(button).attr('href') + 
+									$(button).attr('value') + '/' + 
 									$(this).attr('active');
 		jQuery.ajax({	type:"POST",
-									url:postURL
-								});
+										url:postURL
+									});
 	});
 
 	jQuery("#complexcommands #update").click(function() {
@@ -30,4 +40,14 @@ jQuery(document).ready(function() {
 								});
 	});
 
+	jQuery("#deltafft #deltafftupdate").click(function() {
+		var fftsize = $("form#deltafftints #fftsize").val()
+		//window.updatenewsize(fftsize)
+		var fftfreq = $("form#deltafftints #fftfreq").val()
+    //considering tracking state of delta bins via fftfreq
+		var postURL = $(this).attr('href') + fftsize + "&" + fftfreq
+		jQuery.ajax({	type:"POST",
+									url:postURL
+								});
+	});
 });

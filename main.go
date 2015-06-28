@@ -20,36 +20,49 @@ package main
 
 import (
 	"flag"
+	"log"
 	"net/http"
 	"time"
+
+	"github.com/kevinjos/openbci-driver"
 )
 
 var addr = flag.String("addr", ":8888", "http service address")
+var location = flag.String("loc", "/dev/ttyUSB0", "serial mount point")
+var baud = flag.Int("baud", 115200, "serial baud rate")
+var readTimeout = time.Millisecond
 
 const (
 	channels         = 8
 	samplesPerSecond = 250
-	readTimeout      = 1000 * time.Millisecond
-	readBufferSize   = 33 * samplesPerSecond
-	baud             = 115200
-	FFTSize          = samplesPerSecond
-	RawMsgSize       = 20
+	readBufferSize   = 1024 * 1024
+	RawMsgSize       = 30
 )
 
-var location string = "/dev/ttyUSB0"
-
 func main() {
+	flag.DurationVar(&readTimeout, "rt", 100*time.Millisecond, "serial readtimeout in milliseconds")
+	flag.Parse()
+
 	h := NewHub()
-	shutdown := make(chan bool, 1)
+
+	device, err := openbci.NewDevice(*location, *baud, readTimeout)
+	if err != nil {
+		log.Fatalf("error opening device: %s\n", err)
+	}
 	defer func() {
+		device.Close()
 		h.Close()
 	}()
-	mc := NewMindControl(h.broadcast, shutdown)
+
+	shutdown := make(chan bool, 1)
+	mc := NewMindControl(h.broadcast, shutdown, device)
 	handle := NewHandle(mc)
+
 	http.HandleFunc("/ws", h.wsPacketHandler)
+
 	http.HandleFunc("/", handle.rootHandler)
 	http.HandleFunc("/x/", handle.commandHandler)
-	http.HandleFunc("/open", handle.openHandler)
+	http.HandleFunc("/fft/", handle.fftHandler)
 	http.HandleFunc("/reset", handle.resetHandler)
 	http.HandleFunc("/start", handle.startHandler)
 	http.HandleFunc("/stop", handle.stopHandler)
@@ -59,9 +72,11 @@ func main() {
 	http.HandleFunc("/js/", handle.jsHandler)
 	http.HandleFunc("/static/", handle.cssHandler)
 	http.HandleFunc("/bootstrap/", handle.bootstrapHandler)
+	http.HandleFunc("/js/libs/", handle.libsHandler)
 
 	go h.Run()
 	go mc.Start()
+
 	run := func(shutdown <-chan bool) {
 		go http.ListenAndServe(*addr, nil)
 		for {

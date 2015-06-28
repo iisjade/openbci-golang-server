@@ -1,49 +1,43 @@
 <!DOCTYPE html>
 <html>
   <head>
-		<style>
-
-			.axis text {
-				font: 10px sans-serif;
-			}
-
-			.axis path,
-			.axis line {
-				fill: none;
-				stroke: #000;
-				shape-rendering: crispEdges;
-			}
-
-			.line {
-				fill: none;
-				stroke: steelblue;
-				stroke-width: 1.5px;
-			}
-
-		</style>
-
     <link rel="stylesheet" href="../bootstrap/css/bootstrap.css">
     <link rel="stylesheet" href="/static/main.css">
-		<script src="http://d3js.org/d3.v3.min.js" charset="utf-8"></script>
-		<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
+    <script src="/js/libs/d3.v3.min.js" charset="utf-8"></script>
+    <script src="/js/libs/jquery.min.js"></script>
     <script type="text/javascript">
       if (window["WebSocket"]) {
         conn = new WebSocket("ws://{{$}}/ws");
+
         conn.onclose = function(evt) {
           console.log("closing");
         }
+
         conn.onmessage = function(evt) {
           rdata = JSON.parse(evt.data);
-					if (rdata == null) {
-						return
-					} else if (rdata.Name == "raw") {
-						for (i = 0; i < rdata.Payload.Chan1.length; i++) {
-							timeseries.updateRaw(rdata.Payload.Chan1[i]);
-						}
-					} else if (rdata.Name == "fft") {
-						bciVis.updateData(rdata.Payload.Chan1.slice(0, 125));
-					}
+	  if (rdata == null) {
+            return
+	  } else if (rdata.Name == "raw") {
+            for(var chan=1; chan<9; chan++) {
+              window['updaterawchan'+chan](rdata.Payload['Chan'+chan])
+            }
+          } else if (rdata.Name == "fft") {
+            console.log(rdata.Payload['Chan1']);
+            for(var chan=1; chan<9; chan++) {
+              for(var i=window.fft1.shape[0]-1; i>=0; i--) {
+                for(var j=window.fft1.shape[1]-1; j>=0; j--) {
+                  if(j==0){
+                    window['fft'+chan].set(i, j, rdata.Payload['Chan'+chan][i]);
+                  } else {
+                    window['fft'+chan].set(i, j, window['fft'+chan].get(i, j-1));
+                  }
+                }
+              }
+            window['surface'+chan].update({'field': window['fft'+chan]});
+            }
+          }
         }
+
         conn.onopen = function(evt) {
           console.log("opening");
         }
@@ -55,31 +49,6 @@
         conn.close();
       });
     </script>
-		<script id="vertShader" type="x-shader/x-vertex">
-			uniform mat4 modelMat;
-			uniform mat4 viewMat;
-			uniform mat4 projMat;
-
-			attribute vec3 pos;
-
-			varying vec4 worldPos;
-			void main() {
-				worldPos = modelMat * vec4(pos, 1);
-				gl_Position = projMat * viewMat * worldPos;
-			}
-
-		</script>
-
-		<script id="fragShader" type="x-shader/x-fragment">
-
-			varying mediump vec4 worldPos;
-
-			void main() {
-				gl_FragColor = vec4(1.0 - worldPos.y, worldPos.y, 0.0, 1.0);
-				gl_FragColor.xy = normalize(gl_FragColor.xy);
-
-			}
-		</script>
   </head>
 
   <body>
@@ -102,49 +71,22 @@
       <div class="container-fluid">
         <h1>Visualize your brain waves.</h1>
         <p>Graph your brain waves using the Open-BCI Go Server.</p>
-        <a href="#">Get started</a>
         <div class="row">
           <div class="col-md-8">
             <div class="canvas">
-
-              <canvas id="canvas" width="750" height="500"></canvas>
-              
-              <script id="vertShader" type="x-shader/x-vertex">
-                uniform mat4 modelMat;
-                uniform mat4 viewMat;
-                uniform mat4 projMat;
-                
-                attribute vec3 pos;
-                
-                varying vec4 worldPos;
-                void main() {
-                  worldPos = modelMat * vec4(pos, 1);
-                  gl_Position = projMat * viewMat * worldPos;
-                }
-                
-              </script>
-              
-              <script id="fragShader" type="x-shader/x-fragment">
-                
-                varying mediump vec4 worldPos;
-                
-                void main() {
-                  gl_FragColor = vec4(1.0 - worldPos.y, worldPos.y, 0.0, 1.0);
-                  gl_FragColor.xy = normalize(gl_FragColor.xy);
-                  
-                }
-              </script>
-              
-              <script src="/js/webgl-debug.js"></script>
-              <script src="/js/gl-matrix-min.js"></script>
-              <script src="/js/geometry.js"></script>
-              <script src="/js/main.js"></script>
+              <canvas id="fft1canvas" width="200" height="200"></canvas>
+              <canvas id="fft2canvas" width="200" height="200"></canvas>
+              <canvas id="fft3canvas" width="200" height="200"></canvas>
+              <canvas id="fft4canvas" width="200" height="200"></canvas><br>
+              <canvas id="fft5canvas" width="200" height="200"></canvas>
+              <canvas id="fft6canvas" width="200" height="200"></canvas>
+              <canvas id="fft7canvas" width="200" height="200"></canvas>
+              <canvas id="fft8canvas" width="200" height="200"></canvas>
             </div>
           </div>
 
           <div class="col-md-3">
             <div id="streamcommands" align="center">
-              <input type="button" value="open" href="http://{{$}}/open">
               <input type="button" value="reset" href="http://{{$}}/reset">
               <input type="button" value="start" href="http://{{$}}/start">
               <input type="button" value="stop" href="http://{{$}}/stop">
@@ -211,6 +153,17 @@
                 </select>
               </form>
             </div> 
+
+            <div id="deltafft" align="left">
+              <form id="deltafftints">
+                FFT Size:<input type="text" id="fftsize" value="250">
+                <br>
+                FFT Frequency:<input type="text" id="fftfreq" value="50">
+                <br>
+                <input type="button" id="deltafftupdate" value="DeltaFFT" href="http://{{$}}/fft/">
+              </form>
+            </div>
+
           </div>
         </div>
       </div>
@@ -221,36 +174,50 @@
         <h2>Visualize your brain waves.</h2>
         <p>Graph your brain waves using the Open-BCI Go Server.</p>
         <div class="row">
-          <div class="col-md-4">
-            <div class="thumbnail" id="chantoggle">
-              <svg class="timeseries2d" alt="Channel 1" value="1" href="http://{{$}}/x/" active="true"></svg>            </div>
-            <div class="thumbnail" id="chantoggle">
-              <input type="image" src="http://dailyheal.com/wp-content/uploads/Use-Meditation-To-Reboot-Your-Brain.jpg" alt="Channel 4" value="4" href="http://{{$}}/x/" active="true">Channel 4</input>
+          <div class="col-md-4" id="chantoggle">
+            <div class="thumbnail">
+              <input type="hidden" value="1" href="http://{{$}}/x/">
+                <svg id="timeserieschan1"></svg>
+              </input>
             </div>
-            <div class="thumbnail" id="chantoggle">
-              <input type="image" src="http://dailyheal.com/wp-content/uploads/Use-Meditation-To-Reboot-Your-Brain.jpg" alt="Channel 7" value="7" href="http://{{$}}/x/" active="true">Channel 7</input>
+            <div class="thumbnail">
+              <input type="hidden" value="4" href="http://{{$}}/x/">
+                <svg id="timeserieschan4"></svg>
+              </input>
             </div>
-          </div>
-          <div class="col-md-4">           
-            <div class="thumbnail" id="chantoggle">
-              <input type="image" src="http://dailyheal.com/wp-content/uploads/Use-Meditation-To-Reboot-Your-Brain.jpg" alt="Channel 2" value="2" href="http://{{$}}/x/" active="true">Channel 2</input>
-            </div>
-            <div class="thumbnail" id="chantoggle">
-              <input type="image" src="http://dailyheal.com/wp-content/uploads/Use-Meditation-To-Reboot-Your-Brain.jpg" alt="Channel 5" value="5" href="http://{{$}}/x/" active="true">Channel 5</input>
-            </div>
-            <div class="thumbnail" id="chantoggle">
-              <input type="image" src="http://dailyheal.com/wp-content/uploads/Use-Meditation-To-Reboot-Your-Brain.jpg" alt="Channel 8" value="8" href="http://{{$}}/x/" active="true">Channel 8</input>
+            <div class="thumbnail">
+              <input type="hidden" value="7" href="http://{{$}}/x/">
+                <svg id="timeserieschan7"></svg>
+              </input>
             </div>
           </div>
           <div class="col-md-4">
-            <div class="thumbnail" id="chantoggle">
-              <input type="image" src="http://dailyheal.com/wp-content/uploads/Use-Meditation-To-Reboot-Your-Brain.jpg" alt="Channel 3" value="3" href="http://{{$}}/x/" active="true">Channel 3</input>
+            <div class="thumbnail">
+              <input type="hidden" value="2" href="http://{{$}}/x/">
+                <svg id="timeserieschan2"></svg>
+              </input>
             </div>
-            <div class="thumbnail" id="chantoggle">
-              <input type="image" src="http://dailyheal.com/wp-content/uploads/Use-Meditation-To-Reboot-Your-Brain.jpg" alt="Channel 6" value="6" href="http://{{$}}/x/" active="true">Channel 6</input>
+            <div class="thumbnail">
+              <input type="hidden" value="5" href="http://{{$}}/x/">
+                <svg id="timeserieschan5"></svg>
+              </input>
             </div>
-            <div class="thumbnail" id="chantoggle">
-              <input type="image" src="http://dailyheal.com/wp-content/uploads/Use-Meditation-To-Reboot-Your-Brain.jpg" alt="All Chanels" value="9" href="http://{{$}}/x/" active="true">All Channels</input>
+            <div class="thumbnail">
+              <input type="hidden" value="8" href="http://{{$}}/x/">
+                <svg id="timeserieschan8"></svg>
+              </input>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="thumbnail">
+              <input type="hidden" value="3" href="http://{{$}}/x/">
+                <svg id="timeserieschan3"></svg>
+              </input>
+            </div>
+            <div class="thumbnail">
+              <input type="hidden" value="6" href="http://{{$}}/x/">
+                <svg id="timeserieschan6"></svg>
+              </input>
             </div>
           </div>
         </div>
@@ -279,11 +246,8 @@
       </div>
     </div>
 
-	<script src="/js/gl-matrix-min.js"></script>
-	<script src="/js/geometry.js"></script>
-	<script src="/js/main.js"></script>
 	<script src="/js/handler.js"></script>
 	<script src="/js/timeseries.js"></script>
-	<script src="/js/app.js"></script>
+	<script src="/js/libs/bundle.js"></script>
   </body>
 </html>

@@ -47,20 +47,6 @@ func NewPacketBatcher(size int) *PacketBatcher {
 	}
 }
 
-func (pb *PacketBatcher) dft(input []float64) []float64 {
-	data := fftw.NewArray(pb.size)
-	for idx, val := range input {
-		data.Set(idx, complex(val, 0.0))
-	}
-	forward := fftw.NewPlan(data, data, fftw.Forward, fftw.Estimate)
-	forward.Execute()
-	data_out := make([]float64, pb.size)
-	for idx, val := range data.Elems {
-		data_out[idx] = cmplx.Abs(val)
-	}
-	return data_out
-}
-
 func (pb *PacketBatcher) batch() {
 	for i, p := range pb.packets {
 		pb.Chans["Chan1"][i] = p.Chan1
@@ -72,9 +58,10 @@ func (pb *PacketBatcher) batch() {
 		pb.Chans["Chan7"][i] = p.Chan7
 		pb.Chans["Chan8"][i] = p.Chan8
 	}
-	pb.deleteEmptyChans()
+	// pb.deleteEmptyChans()
 }
 
+/*
 func (pb *PacketBatcher) deleteEmptyChans() {
 	for key, val := range pb.Chans {
 		for i, v := range val {
@@ -87,20 +74,38 @@ func (pb *PacketBatcher) deleteEmptyChans() {
 		}
 	}
 }
+*/
 
 func (pb *PacketBatcher) setFFT() {
 	for key, val := range pb.Chans {
 		mirrored := pb.dft(val)
 		pb.FFTs[key] = mirrored[:len(mirrored)/2]
+		normalizeInPlace(pb.FFTs[key])
 	}
 }
 
+func (pb *PacketBatcher) dft(input []float64) []float64 {
+	data := fftw.NewArray(pb.size)
+	for idx, val := range input {
+		data.Set(idx, complex(val, 0.0))
+	}
+	forward := fftw.NewPlan(data, data, fftw.Forward, fftw.Estimate)
+	defer forward.Destroy()
+	forward.Execute()
+	data_out := make([]float64, pb.size)
+	for idx, val := range data.Elems {
+		data_out[idx] = cmplx.Abs(val)
+	}
+	return data_out
+}
+
 type Packet struct {
-	header, footer, seqNum                                 byte
-	Chan1, Chan2, Chan3, Chan4, Chan5, Chan6, Chan7, Chan8 float64
-	AccX, AccY, AccZ                                       int16
-	SignalQuality                                          uint8
-	Synced                                                 bool
+	header, footer, seqNum                                         byte
+	Chan1, Chan2, Chan3, Chan4, Chan5, Chan6, Chan7, Chan8         float64
+	Rchan1, Rchan2, Rchan3, Rchan4, Rchan5, Rchan6, Rchan7, Rchan8 []byte
+	AccX, AccY, AccZ                                               int16
+	SignalQuality                                                  uint8
+	Synced                                                         bool
 }
 
 func NewPacket() *Packet {
@@ -127,14 +132,22 @@ func (p *Packet) RawChans() map[string][]float64 {
 func encodePacket(p *[33]byte, sq byte, gain *[8]float64, synced bool) *Packet {
 	packet := NewPacket()
 	packet.seqNum = p[1]
-	packet.Chan1 = scaleToVolts(convert24bitTo32bit(p[2:5]), gain[0])
-	packet.Chan2 = scaleToVolts(convert24bitTo32bit(p[5:8]), gain[1])
-	packet.Chan3 = scaleToVolts(convert24bitTo32bit(p[8:11]), gain[2])
-	packet.Chan4 = scaleToVolts(convert24bitTo32bit(p[11:14]), gain[3])
-	packet.Chan5 = scaleToVolts(convert24bitTo32bit(p[14:17]), gain[4])
-	packet.Chan6 = scaleToVolts(convert24bitTo32bit(p[17:20]), gain[5])
-	packet.Chan7 = scaleToVolts(convert24bitTo32bit(p[20:23]), gain[6])
-	packet.Chan8 = scaleToVolts(convert24bitTo32bit(p[23:26]), gain[7])
+	packet.Chan1 = scaleToMicroVolts(convert24bitTo32bit(p[2:5]), gain[0])
+	packet.Rchan1 = p[2:5]
+	packet.Chan2 = scaleToMicroVolts(convert24bitTo32bit(p[5:8]), gain[1])
+	packet.Rchan2 = p[2:5]
+	packet.Chan3 = scaleToMicroVolts(convert24bitTo32bit(p[8:11]), gain[2])
+	packet.Rchan3 = p[2:5]
+	packet.Chan4 = scaleToMicroVolts(convert24bitTo32bit(p[11:14]), gain[3])
+	packet.Rchan4 = p[2:5]
+	packet.Chan5 = scaleToMicroVolts(convert24bitTo32bit(p[14:17]), gain[4])
+	packet.Rchan5 = p[2:5]
+	packet.Chan6 = scaleToMicroVolts(convert24bitTo32bit(p[17:20]), gain[5])
+	packet.Rchan6 = p[2:5]
+	packet.Chan7 = scaleToMicroVolts(convert24bitTo32bit(p[20:23]), gain[6])
+	packet.Rchan7 = p[2:5]
+	packet.Chan8 = scaleToMicroVolts(convert24bitTo32bit(p[23:26]), gain[7])
+	packet.Rchan8 = p[2:5]
 	packet.AccX = convert16bitTo32bit(p[26:28])
 	packet.AccY = convert16bitTo32bit(p[28:30])
 	packet.AccZ = convert16bitTo32bit(p[30:32])
@@ -156,9 +169,10 @@ func convert24bitTo32bit(c []byte) int32 {
 	return int32(x)
 }
 
-func scaleToVolts(c int32, gain float64) float64 {
+//At 24x gain, the possible range is +/-187,500uV
+func scaleToMicroVolts(c int32, gain float64) float64 {
 	scaleFac := 4.5 / gain / ((1 << 23) - 1)
-	return scaleFac * float64(c)
+	return scaleFac * float64(c) * 1000000
 }
 
 //conver16bitTo32bit takes a byte slice of len 2

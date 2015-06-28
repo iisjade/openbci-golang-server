@@ -19,10 +19,13 @@
 package main
 
 import (
+	"fmt"
 	"html/template"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/kevinjos/openbci-driver"
 )
 
 type Handle struct {
@@ -108,6 +111,16 @@ func (handle *Handle) bootstrapHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, "bootstrap/"+t+"/"+f)
 }
 
+func (handle *Handle) libsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+	p := strings.Split(r.URL.Path, "/")
+	f := p[len(p)-1]
+	http.ServeFile(w, r, "js/libs/"+f)
+}
+
 func (handle *Handle) commandHandler(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(r.URL.Path, "/x/") == false {
 		http.Error(w, "Not found", 404)
@@ -118,21 +131,27 @@ func (handle *Handle) commandHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	command := handle.parseCommand(r.URL.Path)
-	if len(command) > 72 {
+	lenCommand := len(command)
+	if lenCommand > 72 {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
-	for _, c := range command {
-		handle.mc.SerialDevice.writeChan <- string(c)
+
+	for i := 0; i < lenCommand; i++ {
+		if lenCommand < 9 {
+			handle.mc.SerialDevice.Write([]byte{command[i]})
+		} else if i%9 == 0 && i+9 < lenCommand {
+			handle.staggerWriter(command[i : i+9])
+		} else if i%9 == 0 {
+			handle.staggerWriter(command[i:])
+		}
 	}
 }
 
-func (handle *Handle) openHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", 405)
-		return
-	}
-	handle.mc.Open()
+func (handle *Handle) staggerWriter(c string) {
+	handle.mc.SerialDevice.Write([]byte{c[0]})
+	handle.mc.SerialDevice.Write([]byte{c[1], c[2], c[3], c[4], c[5], c[6], c[7]})
+	handle.mc.SerialDevice.Write([]byte{c[8]})
 }
 
 func (handle *Handle) closeHandler(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +167,7 @@ func (handle *Handle) startHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
-	handle.mc.SerialDevice.writeChan <- "b"
+	handle.mc.SerialDevice.Write(openbci.Command["start"])
 }
 
 func (handle *Handle) stopHandler(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +175,7 @@ func (handle *Handle) stopHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
-	handle.mc.SerialDevice.writeChan <- "s"
+	handle.mc.SerialDevice.Write(openbci.Command["stop"])
 }
 
 func (handle *Handle) saveHandler(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +185,7 @@ func (handle *Handle) saveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	handle.mc.saving = handle.mc.saving != true
 	if handle.mc.saving == true {
-		go handle.mc.save()
+		go handle.mc.saveBDF()
 	} else {
 		handle.mc.quitSave <- true
 	}
@@ -177,7 +196,13 @@ func (handle *Handle) resetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
-	handle.mc.ResetChan <- true
+	resume := make(chan bool)
+	handle.mc.pauseRead <- resume
+	_, err := handle.mc.SerialDevice.Write(openbci.Command["reset"])
+	if err != nil {
+		fmt.Printf("error reseting device: %s\n", err)
+	}
+	resume <- true
 }
 
 func (handle *Handle) testHandler(w http.ResponseWriter, r *http.Request) {
@@ -185,5 +210,31 @@ func (handle *Handle) testHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
-	handle.mc.genToggleChan <- true
+	handle.mc.genTesting = !handle.mc.genTesting
+	if handle.mc.genTesting == false {
+		handle.mc.quitGenTest <- true
+	} else {
+		go genTestPackets(handle.mc.PacketChan, handle.mc.quitGenTest)
+	}
+}
+
+func (handle *Handle) fftHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+	path := r.URL.Path
+	p := strings.Split(path, "/")
+	data := strings.Split(p[2], "&")
+	fftsize, err := strconv.Atoi(data[0])
+	if err != nil {
+		http.Error(w, "Bad Request, only integers understood", 400)
+		return
+	}
+	fftfreq, err := strconv.Atoi(data[1])
+	if err != nil {
+		http.Error(w, "Bad Request, only integers understood", 400)
+		return
+	}
+	handle.mc.deltaFFT <- [2]int{fftsize, fftfreq}
 }
